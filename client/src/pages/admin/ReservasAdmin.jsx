@@ -1,16 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 
-function toInputDate(value) {
-  if (!value) return "";
-  const fecha = new Date(value);
-  if (Number.isNaN(fecha.getTime())) return "";
-
-  const y = fecha.getFullYear();
-  const m = String(fecha.getMonth() + 1).padStart(2, "0");
-  const d = String(fecha.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 function formatearFecha(valor) {
   if (!valor) return "Sin fecha";
 
@@ -86,9 +75,6 @@ export default function ReservasAdmin() {
 
         setReservas(lista);
 
-        const hoy = toInputDate(new Date());
-        setFechaInicio(hoy);
-        setFechaFin(hoy);
       } catch (err) {
         setError(err.message || "Error al cargar reservas");
       } finally {
@@ -158,7 +144,7 @@ export default function ReservasAdmin() {
       <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
         <h1 className="text-2xl font-bold text-gray-900">📅 Lista de Reservas</h1>
         <p className="text-sm text-gray-600 mt-1">
-          Visualiza las reservas (hasta 5000) y filtra por fecha, estado o texto.
+          Visualiza las reservas (hasta 5000) y filtra por fecha, estado o texto. Por defecto se muestran todas.
         </p>
       </div>
 
@@ -213,6 +199,24 @@ export default function ReservasAdmin() {
             onChange={(e) => setFechaFin(e.target.value)}
             className="px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-gray-500">
+            Tip: si no seleccionas rango de fechas, se muestran todas las reservas disponibles.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setFiltroTexto("");
+              setFiltroEstado("todas");
+              setFechaInicio("");
+              setFechaFin("");
+            }}
+            className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
+          >
+            Limpiar filtros
+          </button>
         </div>
 
         <div className="overflow-x-auto border border-gray-200 rounded-xl">
