@@ -677,6 +677,59 @@ async function construirIndicePuestosConArea() {
   return indice;
 }
 
+const CACHE_INDICE_TTL_MS = 5 * 60 * 1000;
+const CACHE_ESPERA_MAX_MS = 800;
+
+let cacheIndicePuestos = {
+  expiresAt: 0,
+  data: new Map(),
+};
+
+let construccionIndiceEnCurso = null;
+
+function getIndiceCacheVigente() {
+  if (Date.now() < cacheIndicePuestos.expiresAt && cacheIndicePuestos.data instanceof Map) {
+    return cacheIndicePuestos.data;
+  }
+  return null;
+}
+
+function iniciarConstruccionIndice() {
+  if (construccionIndiceEnCurso) return construccionIndiceEnCurso;
+
+  construccionIndiceEnCurso = (async () => {
+    const indice = await construirIndicePuestosConArea();
+    cacheIndicePuestos = {
+      expiresAt: Date.now() + CACHE_INDICE_TTL_MS,
+      data: indice,
+    };
+    return indice;
+  })().finally(() => {
+    construccionIndiceEnCurso = null;
+  });
+
+  return construccionIndiceEnCurso;
+}
+
+async function obtenerIndiceConCache(maxWaitMs = CACHE_ESPERA_MAX_MS) {
+  const vigente = getIndiceCacheVigente();
+  if (vigente) return vigente;
+
+  const promiseConstruccion = iniciarConstruccionIndice();
+
+  if (!maxWaitMs || maxWaitMs <= 0) {
+    return new Map();
+  }
+
+  const timeout = new Promise((resolve) => {
+    setTimeout(() => resolve(null), maxWaitMs);
+  });
+
+  const resultado = await Promise.race([promiseConstruccion, timeout]);
+  return resultado instanceof Map ? resultado : new Map();
+}
+
+
 // GET - Obtener todas las reservas enriquecidas para front admin
 router.get("/todas-enriquecidas", authenticateToken, async (req, res) => {
   const usuario = req.user.username;
@@ -695,7 +748,7 @@ router.get("/todas-enriquecidas", authenticateToken, async (req, res) => {
     }
 
     const reservas = normalizarReservasConNombre(parseDataArray(rawReservas));
-    const indicePuestos = await construirIndicePuestosConArea();
+    const indicePuestos = await obtenerIndiceConCache();
 
     const enriquecidas = reservas.map((reserva) => {
       const idPuesto = Number(reserva?.IdPuestoTrabajo);
@@ -715,6 +768,7 @@ router.get("/todas-enriquecidas", authenticateToken, async (req, res) => {
     logAuditoria('CONSULTAR_TODAS_RESERVAS_ENRIQUECIDAS', usuario, {
       resultado: 'success',
       cantidad: enriquecidas.length,
+      cacheIndice: indicePuestos.size ? 'hit-or-ready' : 'warming',
     });
 
     return res.json(enriquecidas);

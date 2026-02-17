@@ -66,11 +66,26 @@ export default function ReservasAdmin() {
         const token = localStorage.getItem("token");
         const headers = { Authorization: `Bearer ${token}` };
 
-        const resReservas = await fetch(`${API}/api/reservas/todas-enriquecidas`, { headers });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4500);
+
+        let resReservas;
+        try {
+          resReservas = await fetch(`${API}/api/reservas/todas-enriquecidas`, {
+            headers,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
 
         if (!resReservas.ok) {
-          const mensaje = await resReservas.text();
-          throw new Error(`No se pudieron cargar reservas (${resReservas.status}): ${mensaje}`);
+          const fallback = await fetch(`${API}/api/reservas/todas`, { headers });
+          if (!fallback.ok) {
+            const mensaje = await resReservas.text();
+            throw new Error(`No se pudieron cargar reservas (${resReservas.status}): ${mensaje}`);
+          }
+          resReservas = fallback;
         }
 
         const dataReservas = await resReservas.json();
@@ -93,7 +108,39 @@ export default function ReservasAdmin() {
 
         setReservas(enriquecidas);
       } catch (err) {
-        setError(err.message || "Error al cargar reservas");
+        if (err.name === "AbortError") {
+          try {
+            const token = localStorage.getItem("token");
+            const fallback = await fetch(`${API}/api/reservas/todas`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (fallback.ok) {
+              const data = await fallback.json();
+              const reservasBase = Array.isArray(data) ? data : [];
+              const base = reservasBase.map((reserva) => ({
+                ...reserva,
+                NombreEmpleadoVista: getNombreEmpleado(reserva),
+                NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
+                NoPuesto:
+                  reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
+                NumeroPiso: reserva?.NumeroPiso ?? null,
+              }));
+              base.sort((a, b) => {
+                const fechaA = getFechaComparable(b?.FechaReserva);
+                const fechaB = getFechaComparable(a?.FechaReserva);
+                return String(fechaA).localeCompare(String(fechaB));
+              });
+              setReservas(base);
+              setError("Mostramos una versión rápida mientras termina el enriquecimiento.");
+            } else {
+              setError("La carga tardó más de lo esperado.");
+            }
+          } catch {
+            setError("La carga tardó más de lo esperado.");
+          }
+        } else {
+          setError(err.message || "Error al cargar reservas");
+        }
       } finally {
         setLoading(false);
       }
