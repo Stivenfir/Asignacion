@@ -678,7 +678,7 @@ async function construirIndicePuestosConArea() {
 }
 
 const CACHE_INDICE_TTL_MS = 5 * 60 * 1000;
-const CACHE_ESPERA_MAX_MS = 800;
+const CACHE_ESPERA_MAX_MS = 2500;
 
 let cacheIndicePuestos = {
   expiresAt: 0,
@@ -686,6 +686,13 @@ let cacheIndicePuestos = {
 };
 
 let construccionIndiceEnCurso = null;
+
+
+function getIndiceCacheDisponible() {
+  return cacheIndicePuestos?.data instanceof Map && cacheIndicePuestos.data.size
+    ? cacheIndicePuestos.data
+    : null;
+}
 
 function getIndiceCacheVigente() {
   if (Date.now() < cacheIndicePuestos.expiresAt && cacheIndicePuestos.data instanceof Map) {
@@ -718,7 +725,7 @@ async function obtenerIndiceConCache(maxWaitMs = CACHE_ESPERA_MAX_MS) {
   const promiseConstruccion = iniciarConstruccionIndice();
 
   if (!maxWaitMs || maxWaitMs <= 0) {
-    return new Map();
+    return (await promiseConstruccion) || new Map();
   }
 
   const timeout = new Promise((resolve) => {
@@ -726,7 +733,13 @@ async function obtenerIndiceConCache(maxWaitMs = CACHE_ESPERA_MAX_MS) {
   });
 
   const resultado = await Promise.race([promiseConstruccion, timeout]);
-  return resultado instanceof Map ? resultado : new Map();
+  if (resultado instanceof Map) return resultado;
+
+  const stale = getIndiceCacheDisponible();
+  if (stale) return stale;
+
+  // Primera carga sin cache: priorizamos consistencia (área) sobre latencia.
+  return (await promiseConstruccion) || new Map();
 }
 
 

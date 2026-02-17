@@ -111,11 +111,12 @@ export default function ReservasAdmin() {
         if (err.name === "AbortError") {
           try {
             const token = localStorage.getItem("token");
-            const fallback = await fetch(`${API}/api/reservas/todas`, {
+            const retry = await fetch(`${API}/api/reservas/todas-enriquecidas`, {
               headers: { Authorization: `Bearer ${token}` },
             });
-            if (fallback.ok) {
-              const data = await fallback.json();
+
+            if (retry.ok) {
+              const data = await retry.json();
               const reservasBase = Array.isArray(data) ? data : [];
               const base = reservasBase.map((reserva) => ({
                 ...reserva,
@@ -131,9 +132,32 @@ export default function ReservasAdmin() {
                 return String(fechaA).localeCompare(String(fechaB));
               });
               setReservas(base);
-              setError("Mostramos una versión rápida mientras termina el enriquecimiento.");
+              setError("La carga tardó más de lo esperado, pero ya mostramos reservas enriquecidas.");
             } else {
-              setError("La carga tardó más de lo esperado.");
+              const fallback = await fetch(`${API}/api/reservas/todas`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (fallback.ok) {
+                const data = await fallback.json();
+                const reservasBase = Array.isArray(data) ? data : [];
+                const base = reservasBase.map((reserva) => ({
+                  ...reserva,
+                  NombreEmpleadoVista: getNombreEmpleado(reserva),
+                  NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
+                  NoPuesto:
+                    reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
+                  NumeroPiso: reserva?.NumeroPiso ?? null,
+                }));
+                base.sort((a, b) => {
+                  const fechaA = getFechaComparable(b?.FechaReserva);
+                  const fechaB = getFechaComparable(a?.FechaReserva);
+                  return String(fechaA).localeCompare(String(fechaB));
+                });
+                setReservas(base);
+                setError("Mostramos una versión rápida mientras termina el enriquecimiento.");
+              } else {
+                setError("La carga tardó más de lo esperado.");
+              }
             }
           } catch {
             setError("La carga tardó más de lo esperado.");
