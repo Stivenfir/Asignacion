@@ -98,7 +98,7 @@ export default function Sidebar({ isOpen, onClose }) {
                       `}    
                     >    
                       <span className="text-2xl">{item.icon}</span>    
-                      <span className="font-medium">{item.label}</span>    
+                      <span className="font-medium">{String(item.label).replace(" (Próximamente)", "")}</span>    
                       {isActive && (    
                         <motion.div    
                           layoutId="activeIndicator"    
