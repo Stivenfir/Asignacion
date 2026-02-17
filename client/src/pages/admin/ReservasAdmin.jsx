@@ -66,10 +66,7 @@ export default function ReservasAdmin() {
         const token = localStorage.getItem("token");
         const headers = { Authorization: `Bearer ${token}` };
 
-        const [resReservas, resPisos] = await Promise.all([
-          fetch(`${API}/api/reservas/todas`, { headers }),
-          fetch(`${API}/api/pisos`, { headers }),
-        ]);
+        const resReservas = await fetch(`${API}/api/reservas/todas-enriquecidas`, { headers });
 
         if (!resReservas.ok) {
           const mensaje = await resReservas.text();
@@ -79,73 +76,14 @@ export default function ReservasAdmin() {
         const dataReservas = await resReservas.json();
         const reservasBase = Array.isArray(dataReservas) ? dataReservas : [];
 
-        let catalogoPisos = [];
-        if (resPisos.ok) {
-          const dataPisos = await resPisos.json();
-          catalogoPisos = Array.isArray(dataPisos) ? dataPisos : [];
-        }
-
-        const indicePuestos = new Map();
-
-        for (const piso of catalogoPisos) {
-          const idPiso = Number(piso?.IDPiso);
-          if (!idPiso) continue;
-
-          try {
-            const resAreas = await fetch(`${API}/api/areas/piso/${idPiso}`, { headers });
-            if (!resAreas.ok) continue;
-
-            const areas = await resAreas.json();
-            const listaAreas = Array.isArray(areas) ? areas : [];
-
-            const respuestasPuestos = await Promise.all(
-              listaAreas
-                .filter((a) => a?.IdAreaPiso)
-                .map((a) =>
-                  fetch(`${API}/api/puestos/area/${a.IdAreaPiso}`, { headers })
-                    .then((r) => (r.ok ? r.json() : []))
-                    .catch(() => []),
-                ),
-            );
-
-            for (let i = 0; i < listaAreas.length; i += 1) {
-              const area = listaAreas[i];
-              const puestosArea = Array.isArray(respuestasPuestos[i]) ? respuestasPuestos[i] : [];
-
-              for (const puesto of puestosArea) {
-                const idPuesto = Number(puesto?.IdPuestoTrabajo);
-                if (!idPuesto || indicePuestos.has(idPuesto)) continue;
-
-                indicePuestos.set(idPuesto, {
-                  IdPiso: idPiso,
-                  NumeroPiso: piso?.NumeroPiso ?? idPiso,
-                  IdArea: area?.IdArea ?? null,
-                  IdAreaPiso: area?.IdAreaPiso ?? null,
-                  NombreArea: area?.NombreArea ?? null,
-                  NoPuesto: puesto?.NoPuesto ?? puesto?.NumeroPuesto ?? puesto?.Puesto ?? null,
-                });
-              }
-            }
-          } catch {
-            // noop
-          }
-        }
-
-        const enriquecidas = reservasBase.map((reserva) => {
-          const idPuesto = Number(reserva?.IdPuestoTrabajo);
-          const info = idPuesto ? indicePuestos.get(idPuesto) : null;
-
-          return {
-            ...reserva,
-            NombreEmpleadoVista: getNombreEmpleado(reserva),
-            IdArea: reserva?.IdArea ?? info?.IdArea ?? null,
-            IdAreaPiso: reserva?.IdAreaPiso ?? info?.IdAreaPiso ?? null,
-            NombreArea: reserva?.NombreArea ?? info?.NombreArea ?? null,
-            NoPuesto:
-              reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? info?.NoPuesto ?? null,
-            NumeroPiso: reserva?.NumeroPiso ?? info?.NumeroPiso ?? null,
-          };
-        });
+        const enriquecidas = reservasBase.map((reserva) => ({
+          ...reserva,
+          NombreEmpleadoVista: getNombreEmpleado(reserva),
+          NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
+          NoPuesto:
+            reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
+          NumeroPiso: reserva?.NumeroPiso ?? null,
+        }));
 
         enriquecidas.sort((a, b) => {
           const fechaA = getFechaComparable(b?.FechaReserva);

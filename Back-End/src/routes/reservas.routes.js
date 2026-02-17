@@ -602,6 +602,131 @@ router.put("/:idReserva/cancelar", authenticateToken, async (req, res) => {
   }        
 });        
       
+function respuestaExternaInvalida(raw) {
+  return !raw || raw.trim().startsWith('Array') || raw.trim().startsWith(':');
+}
+
+function parseDataArray(raw) {
+  const parsed = JSON.parse(String(raw).trim());
+  const data = parsed?.data;
+  return Array.isArray(data) ? data : [];
+}
+
+function normalizarReservasConNombre(reservas = []) {
+  return reservas.map((reserva) => ({
+    ...reserva,
+    NombreEmpleado:
+      reserva?.NombreEmpleado ||
+      reserva?.NombreUsuario ||
+      reserva?.Usuario ||
+      reserva?.Nombre ||
+      null,
+  }));
+}
+
+async function construirIndicePuestosConArea() {
+  const indice = new Map();
+
+  const rawPisos = await GetData("GetPisos=''");
+  if (respuestaExternaInvalida(rawPisos)) return indice;
+
+  const pisos = parseDataArray(rawPisos);
+
+  for (const piso of pisos) {
+    const idPiso = Number(piso?.IDPiso || piso?.IdPiso);
+    if (!idPiso) continue;
+
+    try {
+      const rawAreas = await GetData(`GetAreas2=${idPiso}`);
+      if (respuestaExternaInvalida(rawAreas)) continue;
+
+      const areas = parseDataArray(rawAreas);
+      const respuestasPuestos = await Promise.all(
+        areas
+          .filter((a) => Number(a?.IdAreaPiso))
+          .map((a) =>
+            GetData(`GetPuestos2=${a.IdAreaPiso}`)
+              .then((raw) => (respuestaExternaInvalida(raw) ? [] : parseDataArray(raw)))
+              .catch(() => []),
+          ),
+      );
+
+      for (let i = 0; i < areas.length; i += 1) {
+        const area = areas[i];
+        const puestos = Array.isArray(respuestasPuestos[i]) ? respuestasPuestos[i] : [];
+
+        for (const puesto of puestos) {
+          const idPuesto = Number(puesto?.IdPuestoTrabajo);
+          if (!idPuesto || indice.has(idPuesto)) continue;
+
+          indice.set(idPuesto, {
+            IdPiso: idPiso,
+            NumeroPiso: piso?.NumeroPiso ?? idPiso,
+            IdArea: area?.IdArea ?? null,
+            IdAreaPiso: area?.IdAreaPiso ?? null,
+            NombreArea: area?.NombreArea ?? null,
+            NoPuesto: puesto?.NoPuesto ?? puesto?.NumeroPuesto ?? puesto?.Puesto ?? null,
+          });
+        }
+      }
+    } catch {
+      // noop
+    }
+  }
+
+  return indice;
+}
+
+// GET - Obtener todas las reservas enriquecidas para front admin
+router.get("/todas-enriquecidas", authenticateToken, async (req, res) => {
+  const usuario = req.user.username;
+
+  try {
+    const rawReservas = await GetData(`ConsultaReservas=@P%3D1,@IdEmpleado%3D0`);
+
+    if (respuestaExternaInvalida(rawReservas)) {
+      logAuditoria('CONSULTAR_TODAS_RESERVAS_ENRIQUECIDAS', usuario, {
+        resultado: 'error',
+        error: 'Servicio de base de datos devolvió formato inválido',
+      });
+      return res.status(503).json({
+        message: "Servicio de base de datos devolvió formato inválido",
+      });
+    }
+
+    const reservas = normalizarReservasConNombre(parseDataArray(rawReservas));
+    const indicePuestos = await construirIndicePuestosConArea();
+
+    const enriquecidas = reservas.map((reserva) => {
+      const idPuesto = Number(reserva?.IdPuestoTrabajo);
+      const info = idPuesto ? indicePuestos.get(idPuesto) : null;
+
+      return {
+        ...reserva,
+        IdArea: reserva?.IdArea ?? info?.IdArea ?? null,
+        IdAreaPiso: reserva?.IdAreaPiso ?? info?.IdAreaPiso ?? null,
+        NombreArea: reserva?.NombreArea ?? info?.NombreArea ?? reserva?.Area ?? null,
+        NoPuesto:
+          reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? info?.NoPuesto ?? null,
+        NumeroPiso: reserva?.NumeroPiso ?? info?.NumeroPiso ?? null,
+      };
+    });
+
+    logAuditoria('CONSULTAR_TODAS_RESERVAS_ENRIQUECIDAS', usuario, {
+      resultado: 'success',
+      cantidad: enriquecidas.length,
+    });
+
+    return res.json(enriquecidas);
+  } catch (error) {
+    logAuditoria('CONSULTAR_TODAS_RESERVAS_ENRIQUECIDAS', usuario, {
+      resultado: 'error',
+      error: error.message,
+    });
+    return res.status(500).json({ message: error.message });
+  }
+});
+
 // GET - Obtener todas las reservas (5000 más recientes) - Solo para admin        
 router.get("/todas", authenticateToken, async (req, res) => {        
   const usuario = req.user.username;        
@@ -622,22 +747,7 @@ router.get("/todas", authenticateToken, async (req, res) => {
       });        
     }        
         
-    var S = Rta.trim();        
-    var D = JSON.parse(S.trim())["data"];        
-        
-    if (!Array.isArray(D)) {        
-      return res.json([]);        
-    }
-
-    const normalizadas = D.map((reserva) => ({
-      ...reserva,
-      NombreEmpleado:
-        reserva?.NombreEmpleado ||
-        reserva?.NombreUsuario ||
-        reserva?.Usuario ||
-        reserva?.Nombre ||
-        null,
-    }));
+    const normalizadas = normalizarReservasConNombre(parseDataArray(Rta));
 
     logAuditoria('CONSULTAR_TODAS_RESERVAS', usuario, {        
       resultado: 'success',        
