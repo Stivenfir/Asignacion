@@ -628,12 +628,23 @@ router.get("/todas", authenticateToken, async (req, res) => {
     if (!Array.isArray(D)) {        
       return res.json([]);        
     }
-       logAuditoria('CONSULTAR_TODAS_RESERVAS', usuario, {        
+
+    const normalizadas = D.map((reserva) => ({
+      ...reserva,
+      NombreEmpleado:
+        reserva?.NombreEmpleado ||
+        reserva?.NombreUsuario ||
+        reserva?.Usuario ||
+        reserva?.Nombre ||
+        null,
+    }));
+
+    logAuditoria('CONSULTAR_TODAS_RESERVAS', usuario, {        
       resultado: 'success',        
-      cantidad: D.length        
+      cantidad: normalizadas.length        
     });        
         
-    return res.json(D);        
+    return res.json(normalizadas);        
   } catch (error) {        
     console.error('Error al obtener todas las reservas:', error);        
     logAuditoria('CONSULTAR_TODAS_RESERVAS', usuario, {        

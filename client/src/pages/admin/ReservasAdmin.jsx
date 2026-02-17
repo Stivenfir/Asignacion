@@ -34,6 +34,7 @@ function getNombreEmpleado(reserva) {
     "NombreEmpleado",
     "Empleado",
     "Nombre",
+    "NombreUsuario",
     "Usuario",
     "Username",
     "UserName",
@@ -180,7 +181,7 @@ export default function ReservasAdmin() {
 
       const camposBusqueda = [
         reserva?.NombreEmpleadoVista,
-        getValorCampo(reserva, ["IdEmpleado"]),
+        getValorCampo(reserva, ["IdEmpleado", "NombreUsuario"]),
         getValorCampo(reserva, ["NombreArea", "Area", "IdArea"]),
         getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]),
         getValorCampo(reserva, ["IdEmpleadoPuestoTrabajo"]),
