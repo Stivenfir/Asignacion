@@ -2,13 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 
 function formatearFecha(valor) {
   if (!valor) return "Sin fecha";
-
   const [soloFecha] = String(valor).split(" ");
   const fecha = new Date(`${soloFecha}T00:00:00`);
-
-  if (Number.isNaN(fecha.getTime())) {
-    return String(valor);
-  }
+  if (Number.isNaN(fecha.getTime())) return String(valor);
 
   return fecha.toLocaleDateString("es-CO", {
     day: "2-digit",
@@ -33,6 +29,21 @@ function getValorCampo(obj, claves = []) {
   return "";
 }
 
+function getNombreEmpleado(reserva) {
+  const nombre = getValorCampo(reserva, [
+    "NombreEmpleado",
+    "Empleado",
+    "Nombre",
+    "Usuario",
+    "Username",
+    "UserName",
+  ]);
+
+  if (nombre) return String(nombre);
+  if (reserva?.IdEmpleado) return `Sin nombre (ID ${reserva.IdEmpleado})`;
+  return "Sin nombre";
+}
+
 export default function ReservasAdmin() {
   const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
@@ -52,29 +63,96 @@ export default function ReservasAdmin() {
         setError("");
 
         const token = localStorage.getItem("token");
+        const headers = { Authorization: `Bearer ${token}` };
 
-        const res = await fetch(`${API}/api/reservas/todas`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const [resReservas, resPisos] = await Promise.all([
+          fetch(`${API}/api/reservas/todas`, { headers }),
+          fetch(`${API}/api/pisos`, { headers }),
+        ]);
 
-        if (!res.ok) {
-          const mensaje = await res.text();
-          throw new Error(`No se pudieron cargar reservas (${res.status}): ${mensaje}`);
+        if (!resReservas.ok) {
+          const mensaje = await resReservas.text();
+          throw new Error(`No se pudieron cargar reservas (${resReservas.status}): ${mensaje}`);
         }
 
-        const data = await res.json();
-        const lista = Array.isArray(data) ? data : [];
+        const dataReservas = await resReservas.json();
+        const reservasBase = Array.isArray(dataReservas) ? dataReservas : [];
 
-        lista.sort((a, b) => {
+        let catalogoPisos = [];
+        if (resPisos.ok) {
+          const dataPisos = await resPisos.json();
+          catalogoPisos = Array.isArray(dataPisos) ? dataPisos : [];
+        }
+
+        const indicePuestos = new Map();
+
+        for (const piso of catalogoPisos) {
+          const idPiso = Number(piso?.IDPiso);
+          if (!idPiso) continue;
+
+          try {
+            const resAreas = await fetch(`${API}/api/areas/piso/${idPiso}`, { headers });
+            if (!resAreas.ok) continue;
+
+            const areas = await resAreas.json();
+            const listaAreas = Array.isArray(areas) ? areas : [];
+
+            const respuestasPuestos = await Promise.all(
+              listaAreas
+                .filter((a) => a?.IdAreaPiso)
+                .map((a) =>
+                  fetch(`${API}/api/puestos/area/${a.IdAreaPiso}`, { headers })
+                    .then((r) => (r.ok ? r.json() : []))
+                    .catch(() => []),
+                ),
+            );
+
+            for (let i = 0; i < listaAreas.length; i += 1) {
+              const area = listaAreas[i];
+              const puestosArea = Array.isArray(respuestasPuestos[i]) ? respuestasPuestos[i] : [];
+
+              for (const puesto of puestosArea) {
+                const idPuesto = Number(puesto?.IdPuestoTrabajo);
+                if (!idPuesto || indicePuestos.has(idPuesto)) continue;
+
+                indicePuestos.set(idPuesto, {
+                  IdPiso: idPiso,
+                  NumeroPiso: piso?.NumeroPiso ?? idPiso,
+                  IdArea: area?.IdArea ?? null,
+                  IdAreaPiso: area?.IdAreaPiso ?? null,
+                  NombreArea: area?.NombreArea ?? null,
+                  NoPuesto: puesto?.NoPuesto ?? puesto?.NumeroPuesto ?? puesto?.Puesto ?? null,
+                });
+              }
+            }
+          } catch {
+            // noop
+          }
+        }
+
+        const enriquecidas = reservasBase.map((reserva) => {
+          const idPuesto = Number(reserva?.IdPuestoTrabajo);
+          const info = idPuesto ? indicePuestos.get(idPuesto) : null;
+
+          return {
+            ...reserva,
+            NombreEmpleadoVista: getNombreEmpleado(reserva),
+            IdArea: reserva?.IdArea ?? info?.IdArea ?? null,
+            IdAreaPiso: reserva?.IdAreaPiso ?? info?.IdAreaPiso ?? null,
+            NombreArea: reserva?.NombreArea ?? info?.NombreArea ?? null,
+            NoPuesto:
+              reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? info?.NoPuesto ?? null,
+            NumeroPiso: reserva?.NumeroPiso ?? info?.NumeroPiso ?? null,
+          };
+        });
+
+        enriquecidas.sort((a, b) => {
           const fechaA = getFechaComparable(b?.FechaReserva);
           const fechaB = getFechaComparable(a?.FechaReserva);
           return String(fechaA).localeCompare(String(fechaB));
         });
 
-        setReservas(lista);
-
+        setReservas(enriquecidas);
       } catch (err) {
         setError(err.message || "Error al cargar reservas");
       } finally {
@@ -101,13 +179,13 @@ export default function ReservasAdmin() {
       if (!texto) return true;
 
       const camposBusqueda = [
-        getValorCampo(reserva, ["NombreEmpleado", "Empleado", "Nombre", "Usuario"]),
-        getValorCampo(reserva, ["Identificacion", "Documento", "Cedula"]),
-        getValorCampo(reserva, ["NombreArea", "Area"]),
-        getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto"]),
-        getValorCampo(reserva, ["IdEmpleado", "IdPuestoTrabajo", "IdEmpleadoPuestoTrabajo"]),
+        reserva?.NombreEmpleadoVista,
+        getValorCampo(reserva, ["IdEmpleado"]),
+        getValorCampo(reserva, ["NombreArea", "Area", "IdArea"]),
+        getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]),
+        getValorCampo(reserva, ["IdEmpleadoPuestoTrabajo"]),
       ]
-        .map((v) => String(v).toLowerCase())
+        .map((v) => String(v || "").toLowerCase())
         .join(" ");
 
       return camposBusqueda.includes(texto);
@@ -131,39 +209,34 @@ export default function ReservasAdmin() {
       .sort((a, b) => b[0].localeCompare(a[0]))
       .slice(0, 7);
 
-    return {
-      total: reservasFiltradas.length,
-      activas,
-      canceladas,
-      dias,
-    };
+    return { total: reservasFiltradas.length, activas, canceladas, dias };
   }, [reservasFiltradas]);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+      <div className="rounded-2xl border border-blue-100 bg-gradient-to-r from-white via-blue-50/70 to-indigo-50/60 p-6 shadow-sm">
         <h1 className="text-2xl font-bold text-gray-900">📅 Lista de Reservas</h1>
-        <p className="text-sm text-gray-600 mt-1">
-          Visualiza las reservas (hasta 5000) y filtra por fecha, estado o texto. Por defecto se muestran todas.
+        <p className="text-sm text-gray-700 mt-1">
+          Vista administrativa completa de reservas (hasta 5000). Incluye filtros, áreas y trazabilidad.
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
           <p className="text-xs text-gray-500">Total filtrado</p>
-          <p className="text-2xl font-semibold text-gray-900">{resumen.total}</p>
+          <p className="text-3xl font-semibold text-gray-900">{resumen.total}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
           <p className="text-xs text-gray-500">Activas</p>
-          <p className="text-2xl font-semibold text-emerald-700">{resumen.activas}</p>
+          <p className="text-3xl font-semibold text-emerald-700">{resumen.activas}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
           <p className="text-xs text-gray-500">Canceladas</p>
-          <p className="text-2xl font-semibold text-rose-700">{resumen.canceladas}</p>
+          <p className="text-3xl font-semibold text-rose-700">{resumen.canceladas}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
           <p className="text-xs text-gray-500">Días con reservas</p>
-          <p className="text-2xl font-semibold text-indigo-700">{resumen.dias.length}</p>
+          <p className="text-3xl font-semibold text-indigo-700">{resumen.dias.length}</p>
         </div>
       </div>
 
@@ -172,7 +245,7 @@ export default function ReservasAdmin() {
           <input
             value={filtroTexto}
             onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar por empleado, área, puesto o ID"
+            placeholder="Buscar por persona, área, puesto, ID reserva o ID empleado"
             className="md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
 
@@ -203,7 +276,7 @@ export default function ReservasAdmin() {
 
         <div className="flex items-center justify-between">
           <p className="text-xs text-gray-500">
-            Tip: si no seleccionas rango de fechas, se muestran todas las reservas disponibles.
+            Si no seleccionas rango de fechas, se muestran todas las reservas disponibles.
           </p>
           <button
             type="button"
@@ -224,8 +297,9 @@ export default function ReservasAdmin() {
             <thead className="bg-gray-50 text-gray-700">
               <tr>
                 <th className="text-left p-3 font-semibold">Fecha</th>
-                <th className="text-left p-3 font-semibold">Empleado</th>
+                <th className="text-left p-3 font-semibold">Persona</th>
                 <th className="text-left p-3 font-semibold">Área</th>
+                <th className="text-left p-3 font-semibold">ID Área</th>
                 <th className="text-left p-3 font-semibold">Puesto</th>
                 <th className="text-left p-3 font-semibold">Estado</th>
                 <th className="text-left p-3 font-semibold">ID Reserva</th>
@@ -234,27 +308,36 @@ export default function ReservasAdmin() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="p-4 text-gray-500" colSpan={6}>Cargando reservas...</td>
+                  <td className="p-4 text-gray-500" colSpan={7}>Cargando reservas...</td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td className="p-4 text-rose-600" colSpan={6}>{error}</td>
+                  <td className="p-4 text-rose-600" colSpan={7}>{error}</td>
                 </tr>
               ) : reservasFiltradas.length === 0 ? (
                 <tr>
-                  <td className="p-4 text-gray-500" colSpan={6}>No hay reservas con esos filtros.</td>
+                  <td className="p-4 text-gray-500" colSpan={7}>No hay reservas con esos filtros.</td>
                 </tr>
               ) : (
-                reservasFiltradas.map((reserva) => (
-                  <tr key={`${reserva?.IdEmpleadoPuestoTrabajo}-${reserva?.FechaReserva}`} className="border-t border-gray-100">
+                reservasFiltradas.map((reserva, idx) => (
+                  <tr
+                    key={`${reserva?.IdEmpleadoPuestoTrabajo}-${reserva?.FechaReserva}-${idx}`}
+                    className="border-t border-gray-100 odd:bg-white even:bg-gray-50/50"
+                  >
                     <td className="p-3 text-gray-700">{formatearFecha(reserva?.FechaReserva)}</td>
                     <td className="p-3 text-gray-900">
-                      {getValorCampo(reserva, ["NombreEmpleado", "Empleado", "Nombre", "Usuario", "IdEmpleado"]) || "Sin dato"}
+                      <p className="font-medium">{reserva?.NombreEmpleadoVista || "Sin nombre"}</p>
+                      <p className="text-xs text-gray-500">ID Empleado: {reserva?.IdEmpleado || "N/D"}</p>
                     </td>
                     <td className="p-3 text-gray-700">{getValorCampo(reserva, ["NombreArea", "Area"]) || "Sin área"}</td>
+                    <td className="p-3 text-gray-700">{reserva?.IdArea || "N/D"}</td>
                     <td className="p-3 text-gray-700">{getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]) || "Sin puesto"}</td>
                     <td className="p-3">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${reserva?.ReservaActiva ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                      <span
+                        className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          reserva?.ReservaActiva ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
+                        }`}
+                      >
                         {reserva?.ReservaActiva ? "Activa" : "Cancelada"}
                       </span>
                     </td>
