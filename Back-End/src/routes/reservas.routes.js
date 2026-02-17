@@ -107,6 +107,88 @@ function logAuditoria(accion, usuario, detalles) {
   const logEntry = { timestamp, accion, usuario, ...detalles };        
   console.log('[AUDIT]', JSON.stringify(logEntry));        
 }        
+
+function obtenerNombreEmpleado(reserva) {
+  return (
+    reserva?.NombreEmpleado ||
+    reserva?.NombreUsuario ||
+    reserva?.Usuario ||
+    reserva?.Nombre ||
+    null
+  );
+}
+
+function normalizarReserva(reserva) {
+  return {
+    ...reserva,
+    NombreEmpleado: obtenerNombreEmpleado(reserva),
+  };
+}
+
+function getFechaComparable(valor) {
+  if (!valor) return "";
+  const [soloFecha] = String(valor).split(" ");
+  return soloFecha;
+}
+
+function filtrarReservas(reservas, { search, estado, fechaInicio, fechaFin }) {
+  const texto = String(search || "").trim().toLowerCase();
+
+  return reservas.filter((reserva) => {
+    const fecha = getFechaComparable(reserva?.FechaReserva);
+    const activa = Boolean(reserva?.ReservaActiva);
+
+    if (estado === "activas" && !activa) return false;
+    if (estado === "canceladas" && activa) return false;
+    if (fechaInicio && fecha < fechaInicio) return false;
+    if (fechaFin && fecha > fechaFin) return false;
+
+    if (!texto) return true;
+
+    const compuesto = [
+      reserva?.NombreEmpleado,
+      reserva?.NombreUsuario,
+      reserva?.IdEmpleado,
+      reserva?.IdEmpleadoPuestoTrabajo,
+      reserva?.NombreArea,
+      reserva?.Area,
+      reserva?.IdArea,
+      reserva?.NoPuesto,
+      reserva?.NumeroPuesto,
+      reserva?.Puesto,
+      reserva?.IdPuestoTrabajo,
+    ]
+      .map((v) => String(v || "").toLowerCase())
+      .join(" ");
+
+    return compuesto.includes(texto);
+  });
+}
+
+function ordenarReservas(reservas, sortBy, sortDir) {
+  const dir = String(sortDir || "desc").toLowerCase() === "asc" ? 1 : -1;
+  const camposPermitidos = new Set([
+    "FechaReserva",
+    "NombreEmpleado",
+    "NombreArea",
+    "NoPuesto",
+    "ReservaActiva",
+    "IdEmpleadoPuestoTrabajo",
+    "IdEmpleado",
+  ]);
+  const campo = camposPermitidos.has(sortBy) ? sortBy : "FechaReserva";
+
+  return [...reservas].sort((a, b) => {
+    const valorA = campo === "FechaReserva" ? getFechaComparable(a?.FechaReserva) : (a?.[campo] ?? "");
+    const valorB = campo === "FechaReserva" ? getFechaComparable(b?.FechaReserva) : (b?.[campo] ?? "");
+
+    if (campo === "ReservaActiva") {
+      return (Number(Boolean(valorA)) - Number(Boolean(valorB))) * dir;
+    }
+
+    return String(valorA).localeCompare(String(valorB), "es", { numeric: true, sensitivity: "base" }) * dir;
+  });
+}
         
 // GET - Obtener las 1000 reservas más recientes de un empleado         
 router.get("/empleado", authenticateToken, async (req, res) => {      
@@ -629,15 +711,7 @@ router.get("/todas", authenticateToken, async (req, res) => {
       return res.json([]);        
     }
 
-    const normalizadas = D.map((reserva) => ({
-      ...reserva,
-      NombreEmpleado:
-        reserva?.NombreEmpleado ||
-        reserva?.NombreUsuario ||
-        reserva?.Usuario ||
-        reserva?.Nombre ||
-        null,
-    }));
+    const normalizadas = D.map(normalizarReserva);
 
     logAuditoria('CONSULTAR_TODAS_RESERVAS', usuario, {        
       resultado: 'success',        
@@ -654,5 +728,74 @@ router.get("/todas", authenticateToken, async (req, res) => {
     return res.status(500).json({ message: error.message });        
   }        
 });        
+
+router.get("/todas-paginadas", authenticateToken, async (req, res) => {
+  const usuario = req.user.username;
+
+  try {
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const pageSizeRaw = Number.parseInt(req.query.pageSize, 10) || 20;
+    const pageSize = Math.min(200, Math.max(5, pageSizeRaw));
+
+    const filtros = {
+      search: req.query.search || "",
+      estado: req.query.estado || "todas",
+      fechaInicio: req.query.fechaInicio || "",
+      fechaFin: req.query.fechaFin || "",
+    };
+
+    const sortBy = req.query.sortBy || "FechaReserva";
+    const sortDir = req.query.sortDir || "desc";
+
+    const Rta = await GetData(`ConsultaReservas=@P%3D1,@IdEmpleado%3D0`);
+
+    if (!Rta || Rta.trim().startsWith('Array') || Rta.trim().startsWith(':')) {
+      logAuditoria('CONSULTAR_RESERVAS_PAGINADAS', usuario, {
+        resultado: 'error',
+        error: 'Servicio de base de datos devolvió formato inválido'
+      });
+      return res.status(503).json({ message: "Servicio de base de datos devolvió formato inválido" });
+    }
+
+    const data = JSON.parse(Rta.trim())?.data;
+    const normalizadas = Array.isArray(data) ? data.map(normalizarReserva) : [];
+    const filtradas = filtrarReservas(normalizadas, filtros);
+    const ordenadas = ordenarReservas(filtradas, sortBy, sortDir);
+
+    const total = ordenadas.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const pageSafe = Math.min(page, totalPages);
+    const offset = (pageSafe - 1) * pageSize;
+    const items = ordenadas.slice(offset, offset + pageSize);
+
+    logAuditoria('CONSULTAR_RESERVAS_PAGINADAS', usuario, {
+      resultado: 'success',
+      total,
+      page: pageSafe,
+      pageSize,
+      sortBy,
+      sortDir,
+    });
+
+    return res.json({
+      items,
+      meta: {
+        page: pageSafe,
+        pageSize,
+        total,
+        totalPages,
+        sortBy,
+        sortDir,
+      },
+    });
+  } catch (error) {
+    console.error('Error al obtener reservas paginadas:', error);
+    logAuditoria('CONSULTAR_RESERVAS_PAGINADAS', usuario, {
+      resultado: 'error',
+      error: error.message,
+    });
+    return res.status(500).json({ message: error.message });
+  }
+});
         
 export default router;

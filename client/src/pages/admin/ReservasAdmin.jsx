@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 function formatearFecha(valor) {
   if (!valor) return "Sin fecha";
@@ -45,362 +45,318 @@ function getNombreEmpleado(reserva) {
   return "Sin nombre";
 }
 
+const COLUMNAS = [
+  { key: "FechaReserva", label: "Fecha", sortable: true },
+  { key: "Persona", label: "Persona", sortable: true },
+  { key: "NombreArea", label: "Área", sortable: true },
+  { key: "NoPuesto", label: "Puesto", sortable: true },
+  { key: "ReservaActiva", label: "Estado", sortable: true },
+  { key: "IdEmpleadoPuestoTrabajo", label: "ID Reserva", sortable: true },
+];
+
 export default function ReservasAdmin() {
   const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
-
   const [reservas, setReservas] = useState([]);
+  const [meta, setMeta] = useState({ page: 1, pageSize: 20, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [exportando, setExportando] = useState(false);
 
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todas");
   const [fechaInicio, setFechaInicio] = useState("");
   const [fechaFin, setFechaFin] = useState("");
+  const [sortBy, setSortBy] = useState("FechaReserva");
+  const [sortDir, setSortDir] = useState("desc");
+  const [columnasVisibles, setColumnasVisibles] = useState(() =>
+    Object.fromEntries(COLUMNAS.map((c) => [c.key, true])),
+  );
 
-  const normalizarYOrdenarReservas = (dataReservas) => {
-    const reservasBase = Array.isArray(dataReservas) ? dataReservas : [];
+  const indicePuestosRef = useRef(null);
 
-    const normalizadas = reservasBase.map((reserva) => ({
-      ...reserva,
-      NombreEmpleadoVista: getNombreEmpleado(reserva),
-      NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
-      NoPuesto:
-        reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
-      NumeroPiso: reserva?.NumeroPiso ?? null,
-    }));
+  const construirIndicePuestos = async (headers) => {
+    if (indicePuestosRef.current) return indicePuestosRef.current;
 
-    normalizadas.sort((a, b) => {
-      const fechaA = getFechaComparable(b?.FechaReserva);
-      const fechaB = getFechaComparable(a?.FechaReserva);
-      return String(fechaA).localeCompare(String(fechaB));
-    });
-
-    return normalizadas;
-  };
-
-  const enriquecerConAreaYPuesto = async (reservasBase, headers) => {
-    const lista = Array.isArray(reservasBase) ? reservasBase : [];
-    if (!lista.length) return [];
-
-    const necesitaEnriquecer = lista.some(
-      (r) => !r?.NombreArea || r?.NoPuesto == null,
-    );
-    if (!necesitaEnriquecer) return normalizarYOrdenarReservas(lista);
-
+    const indice = new Map();
     const resPisos = await fetch(`${API}/api/pisos`, { headers });
     const pisos = resPisos.ok ? await resPisos.json() : [];
-    const catalogoPisos = Array.isArray(pisos) ? pisos : [];
 
-    const indicePuestos = new Map();
-
-    for (const piso of catalogoPisos) {
+    for (const piso of Array.isArray(pisos) ? pisos : []) {
       const idPiso = Number(piso?.IDPiso);
       if (!idPiso) continue;
 
-      try {
-        const resAreas = await fetch(`${API}/api/areas/piso/${idPiso}`, { headers });
-        if (!resAreas.ok) continue;
+      const resAreas = await fetch(`${API}/api/areas/piso/${idPiso}`, { headers });
+      if (!resAreas.ok) continue;
 
-        const areas = await resAreas.json();
-        const listaAreas = Array.isArray(areas) ? areas : [];
+      const areas = await resAreas.json();
+      const listaAreas = Array.isArray(areas) ? areas : [];
 
-        const respuestasPuestos = await Promise.all(
-          listaAreas
-            .filter((a) => a?.IdAreaPiso)
-            .map((a) =>
-              fetch(`${API}/api/puestos/area/${a.IdAreaPiso}`, { headers })
-                .then((r) => (r.ok ? r.json() : []))
-                .catch(() => []),
-            ),
-        );
+      const puestosAreas = await Promise.all(
+        listaAreas
+          .filter((a) => a?.IdAreaPiso)
+          .map((a) => fetch(`${API}/api/puestos/area/${a.IdAreaPiso}`, { headers }).then((r) => (r.ok ? r.json() : []))),
+      );
 
-        for (let i = 0; i < listaAreas.length; i += 1) {
-          const area = listaAreas[i];
-          const puestosArea = Array.isArray(respuestasPuestos[i]) ? respuestasPuestos[i] : [];
-
-          for (const puesto of puestosArea) {
-            const idPuesto = Number(puesto?.IdPuestoTrabajo);
-            if (!idPuesto || indicePuestos.has(idPuesto)) continue;
-
-            indicePuestos.set(idPuesto, {
-              NombreArea: area?.NombreArea ?? null,
-              NoPuesto: puesto?.NoPuesto ?? puesto?.NumeroPuesto ?? puesto?.Puesto ?? null,
-              NumeroPiso: piso?.NumeroPiso ?? idPiso,
-            });
-          }
+      for (let i = 0; i < listaAreas.length; i += 1) {
+        const area = listaAreas[i];
+        const puestos = Array.isArray(puestosAreas[i]) ? puestosAreas[i] : [];
+        for (const puesto of puestos) {
+          const idPuesto = Number(puesto?.IdPuestoTrabajo);
+          if (!idPuesto || indice.has(idPuesto)) continue;
+          indice.set(idPuesto, {
+            NombreArea: area?.NombreArea ?? null,
+            NoPuesto: puesto?.NoPuesto ?? puesto?.NumeroPuesto ?? puesto?.Puesto ?? null,
+          });
         }
-      } catch {
-        // noop
       }
     }
 
-    const enriquecidas = lista.map((r) => {
-      const info = indicePuestos.get(Number(r?.IdPuestoTrabajo));
+    indicePuestosRef.current = indice;
+    return indice;
+  };
+
+  const enriquecer = async (items, headers) => {
+    const indice = await construirIndicePuestos(headers);
+
+    return (Array.isArray(items) ? items : []).map((reserva) => {
+      const info = indice.get(Number(reserva?.IdPuestoTrabajo));
       return {
-        ...r,
-        NombreArea: r?.NombreArea ?? info?.NombreArea ?? r?.Area ?? null,
-        NoPuesto: r?.NoPuesto ?? r?.NumeroPuesto ?? r?.Puesto ?? info?.NoPuesto ?? r?.IdPuestoTrabajo ?? null,
-        NumeroPiso: r?.NumeroPiso ?? info?.NumeroPiso ?? null,
+        ...reserva,
+        NombreEmpleadoVista: getNombreEmpleado(reserva),
+        NombreArea: reserva?.NombreArea ?? reserva?.Area ?? info?.NombreArea ?? null,
+        NoPuesto:
+          reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? info?.NoPuesto ?? reserva?.IdPuestoTrabajo ?? null,
       };
     });
+  };
 
-    return normalizarYOrdenarReservas(enriquecidas);
+  const cargarReservas = async ({ page = meta.page, pageSize = meta.pageSize } = {}) => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const token = localStorage.getItem("token");
+      const headers = { Authorization: `Bearer ${token}` };
+      const qs = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+        search: filtroTexto,
+        estado: filtroEstado,
+        fechaInicio,
+        fechaFin,
+        sortBy,
+        sortDir,
+      });
+
+      const res = await fetch(`${API}/api/reservas/todas-paginadas?${qs.toString()}`, { headers });
+      if (!res.ok) throw new Error(`No se pudieron cargar reservas (${res.status})`);
+
+      const payload = await res.json();
+      const enriquecidas = await enriquecer(payload?.items || [], headers);
+      setReservas(enriquecidas);
+      setMeta(payload?.meta || { page: 1, pageSize: 20, total: 0, totalPages: 1 });
+    } catch (err) {
+      setError(err.message || "Error al cargar reservas");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    let cancelled = false;
+    cargarReservas({ page: 1, pageSize: meta.pageSize });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroEstado, fechaInicio, fechaFin, sortBy, sortDir]);
 
-    const cargarReservas = async () => {
-      setLoading(true);
-      setError("");
-
-      try {
-        const token = localStorage.getItem("token");
-        const headers = { Authorization: `Bearer ${token}` };
-
-        const resReservas = await fetch(`${API}/api/reservas/todas`, { headers });
-
-        if (!resReservas.ok) {
-          const mensaje = await resReservas.text();
-          throw new Error(`No se pudieron cargar reservas (${resReservas.status}): ${mensaje}`);
-        }
-
-        const dataReservas = await resReservas.json();
-        const listaFinal = await enriquecerConAreaYPuesto(dataReservas, headers);
-
-        if (!cancelled) {
-          setReservas(listaFinal);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err.message || "Error al cargar reservas");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    cargarReservas();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [API]);
-
-  const reservasFiltradas = useMemo(() => {
-    const texto = filtroTexto.trim().toLowerCase();
-
-    return reservas.filter((reserva) => {
-      const fechaComparable = getFechaComparable(reserva?.FechaReserva);
-      const estaActiva = Boolean(reserva?.ReservaActiva);
-
-      if (filtroEstado === "activas" && !estaActiva) return false;
-      if (filtroEstado === "canceladas" && estaActiva) return false;
-
-      if (fechaInicio && fechaComparable < fechaInicio) return false;
-      if (fechaFin && fechaComparable > fechaFin) return false;
-
-      if (!texto) return true;
-
-      const camposBusqueda = [
-        reserva?.NombreEmpleadoVista,
-        getValorCampo(reserva, ["IdEmpleado", "NombreUsuario"]),
-        getValorCampo(reserva, ["NombreArea", "Area", "IdArea"]),
-        getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]),
-        getValorCampo(reserva, ["IdEmpleadoPuestoTrabajo"]),
-      ]
-        .map((v) => String(v || "").toLowerCase())
-        .join(" ");
-
-      return camposBusqueda.includes(texto);
-    });
-  }, [reservas, filtroEstado, fechaInicio, fechaFin, filtroTexto]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      cargarReservas({ page: 1, pageSize: meta.pageSize });
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroTexto]);
 
   const resumen = useMemo(() => {
-    const porDia = new Map();
     let activas = 0;
     let canceladas = 0;
-
-    for (const reserva of reservasFiltradas) {
-      const fecha = getFechaComparable(reserva?.FechaReserva) || "Sin fecha";
-      porDia.set(fecha, (porDia.get(fecha) || 0) + 1);
-
+    for (const reserva of reservas) {
       if (reserva?.ReservaActiva) activas += 1;
       else canceladas += 1;
     }
+    return { total: meta.total || 0, activas, canceladas };
+  }, [reservas, meta.total]);
 
-    const dias = Array.from(porDia.entries())
-      .sort((a, b) => b[0].localeCompare(a[0]))
-      .slice(0, 7);
+  const columnasActivas = COLUMNAS.filter((c) => columnasVisibles[c.key]);
 
-    return { total: reservasFiltradas.length, activas, canceladas, dias };
-  }, [reservasFiltradas]);
+  const toggleSort = (campo) => {
+    if (sortBy === campo) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortBy(campo);
+    setSortDir("asc");
+  };
+
+  const obtenerTodoParaExportar = async () => {
+    const token = localStorage.getItem("token");
+    const headers = { Authorization: `Bearer ${token}` };
+    const acumulado = [];
+    let page = 1;
+    let totalPages = 1;
+
+    while (page <= totalPages) {
+      const qs = new URLSearchParams({
+        page: String(page),
+        pageSize: "200",
+        search: filtroTexto,
+        estado: filtroEstado,
+        fechaInicio,
+        fechaFin,
+        sortBy,
+        sortDir,
+      });
+      const res = await fetch(`${API}/api/reservas/todas-paginadas?${qs.toString()}`, { headers });
+      if (!res.ok) throw new Error("No fue posible obtener datos para exportar");
+      const payload = await res.json();
+      totalPages = payload?.meta?.totalPages || 1;
+      const enriquecidas = await enriquecer(payload?.items || [], headers);
+      acumulado.push(...enriquecidas);
+      page += 1;
+    }
+
+    return acumulado;
+  };
+
+  const exportar = async (tipo) => {
+    try {
+      setExportando(true);
+      const data = await obtenerTodoParaExportar();
+      const filas = data.map((r) => ({
+        Fecha: formatearFecha(r?.FechaReserva),
+        Persona: r?.NombreEmpleadoVista || "Sin nombre",
+        "ID Empleado": r?.IdEmpleado || "N/D",
+        Área: getValorCampo(r, ["NombreArea", "Area"]) || "Sin área",
+        Puesto: getValorCampo(r, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]) || "Sin puesto",
+        Estado: r?.ReservaActiva ? "Activa" : "Cancelada",
+        "ID Reserva": r?.IdEmpleadoPuestoTrabajo || "-",
+      }));
+
+      const headers = Object.keys(filas[0] || {});
+      const rowsCsv = [headers.join(",")]
+        .concat(
+          filas.map((row) =>
+            headers
+              .map((h) => `"${String(row[h] ?? "").replaceAll('"', '""')}"`)
+              .join(","),
+          ),
+        )
+        .join("\n");
+
+      const rowsTsv = [headers.join("\t")]
+        .concat(
+          filas.map((row) => headers.map((h) => String(row[h] ?? "")).join("\t")),
+        )
+        .join("\n");
+
+      const contenido = tipo === "csv" ? rowsCsv : rowsTsv;
+      const blob = new Blob([contenido], {
+        type:
+          tipo === "csv"
+            ? "text/csv;charset=utf-8;"
+            : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8;",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `reservas_filtradas_${Date.now()}.${tipo === "csv" ? "csv" : "xlsx"}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message || "Error al exportar");
+    } finally {
+      setExportando(false);
+    }
+  };
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <div className="rounded-2xl border border-blue-100 bg-gradient-to-r from-white via-blue-50/70 to-indigo-50/60 p-6 shadow-sm">
         <h1 className="text-2xl font-bold text-gray-900">📅 Lista de Reservas</h1>
-        <p className="text-sm text-gray-700 mt-1">
-          Panel administrativo de reservas (hasta 5000), con filtros avanzados y visualización operativa por persona, área y estado.
-        </p>
+        <p className="text-sm text-gray-700 mt-1">Paginación server-side, orden dinámico y exportación con filtros aplicados.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-          <p className="text-xs text-gray-500">Total filtrado</p>
-          <p className="text-3xl font-semibold text-gray-900">{resumen.total}</p>
-        </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-          <p className="text-xs text-gray-500">Activas</p>
-          <p className="text-3xl font-semibold text-emerald-700">{resumen.activas}</p>
-        </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-          <p className="text-xs text-gray-500">Canceladas</p>
-          <p className="text-3xl font-semibold text-rose-700">{resumen.canceladas}</p>
-        </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-          <p className="text-xs text-gray-500">Días con reservas</p>
-          <p className="text-3xl font-semibold text-indigo-700">{resumen.dias.length}</p>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"><p className="text-xs text-gray-500">Total filtrado</p><p className="text-3xl font-semibold">{resumen.total}</p></div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"><p className="text-xs text-gray-500">Activas (página)</p><p className="text-3xl font-semibold text-emerald-700">{resumen.activas}</p></div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"><p className="text-xs text-gray-500">Canceladas (página)</p><p className="text-3xl font-semibold text-rose-700">{resumen.canceladas}</p></div>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-          <h2 className="text-lg font-semibold text-gray-900">Filtros y detalle de reservas</h2>
-          <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
-            Datos en tiempo real
-          </span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar por persona, área, puesto, ID reserva o ID empleado"
-            className="md:col-span-2 px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-
-          <select
-            value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="todas">Todas</option>
-            <option value="activas">Activas</option>
-            <option value="canceladas">Canceladas</option>
-          </select>
-
-          <input
-            type="date"
-            value={fechaInicio}
-            onChange={(e) => setFechaInicio(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-
-          <input
-            type="date"
-            value={fechaFin}
-            onChange={(e) => setFechaFin(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+          <input value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)} placeholder="Buscar" className="md:col-span-2 px-3 py-2 rounded-lg border border-gray-300" />
+          <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className="px-3 py-2 rounded-lg border border-gray-300"><option value="todas">Todas</option><option value="activas">Activas</option><option value="canceladas">Canceladas</option></select>
+          <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} className="px-3 py-2 rounded-lg border border-gray-300" />
+          <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} className="px-3 py-2 rounded-lg border border-gray-300" />
+          <select value={meta.pageSize} onChange={(e) => cargarReservas({ page: 1, pageSize: Number(e.target.value) })} className="px-3 py-2 rounded-lg border border-gray-300"><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option><option value={100}>100</option></select>
         </div>
 
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">
-            Si no seleccionas rango de fechas, se muestran todas las reservas disponibles.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setFiltroTexto("");
-              setFiltroEstado("todas");
-              setFechaInicio("");
-              setFechaFin("");
-            }}
-            className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            Limpiar filtros
-          </button>
+        <div className="flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex flex-wrap gap-2">
+            {COLUMNAS.map((col) => (
+              <button key={col.key} type="button" onClick={() => setColumnasVisibles((prev) => ({ ...prev, [col.key]: !prev[col.key] }))} className={`px-2 py-1 text-xs rounded-full border ${columnasVisibles[col.key] ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
+                {columnasVisibles[col.key] ? "👁" : "🙈"} {col.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => exportar("csv")} disabled={exportando} className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm">Exportar CSV</button>
+            <button type="button" onClick={() => exportar("xlsx")} disabled={exportando} className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm">Exportar XLSX</button>
+          </div>
         </div>
 
-        <div className="overflow-x-auto border border-gray-200 rounded-xl shadow-inner">
+        <div className="overflow-x-auto border border-gray-200 rounded-xl">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 text-gray-700">
               <tr>
-                <th className="text-left p-3 font-semibold">Fecha</th>
-                <th className="text-left p-3 font-semibold">Persona</th>
-                <th className="text-left p-3 font-semibold">Área</th>
-                <th className="text-left p-3 font-semibold">Puesto</th>
-                <th className="text-left p-3 font-semibold">Estado</th>
-                <th className="text-left p-3 font-semibold">ID Reserva</th>
+                {columnasActivas.map((col) => (
+                  <th key={col.key} className="text-left p-3 font-semibold">
+                    <button type="button" onClick={() => col.sortable && toggleSort(col.key === "Persona" ? "NombreEmpleado" : col.key)} className="inline-flex items-center gap-1">
+                      {col.label} {sortBy === (col.key === "Persona" ? "NombreEmpleado" : col.key) ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                    </button>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr>
-                  <td className="p-4 text-gray-500" colSpan={6}>Cargando reservas...</td>
-                </tr>
+                <tr><td className="p-4 text-gray-500" colSpan={columnasActivas.length}>Cargando reservas...</td></tr>
               ) : error ? (
-                <tr>
-                  <td className="p-4 text-rose-600" colSpan={6}>{error}</td>
-                </tr>
-              ) : reservasFiltradas.length === 0 ? (
-                <tr>
-                  <td className="p-4 text-gray-500" colSpan={6}>No hay reservas con esos filtros.</td>
-                </tr>
+                <tr><td className="p-4 text-rose-600" colSpan={columnasActivas.length}>{error}</td></tr>
+              ) : reservas.length === 0 ? (
+                <tr><td className="p-4 text-gray-500" colSpan={columnasActivas.length}>No hay reservas con esos filtros.</td></tr>
               ) : (
-                reservasFiltradas.map((reserva, idx) => (
-                  <tr
-                    key={`${reserva?.IdEmpleadoPuestoTrabajo}-${reserva?.FechaReserva}-${idx}`}
-                    className="border-t border-gray-100 odd:bg-white even:bg-gray-50/50"
-                  >
-                    <td className="p-3 text-gray-700">{formatearFecha(reserva?.FechaReserva)}</td>
-                    <td className="p-3 text-gray-900">
-                      <p className="font-medium">{reserva?.NombreEmpleadoVista || "Sin nombre"}</p>
-                      <p className="text-xs text-gray-500">ID Empleado: {reserva?.IdEmpleado || "N/D"}</p>
-                    </td>
-                    <td className="p-3 text-gray-700">
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-indigo-50 text-indigo-700 border border-indigo-100">
-                        {getValorCampo(reserva, ["NombreArea", "Area"]) || "Sin área"}
-                      </span>
-                    </td>
-                    <td className="p-3 text-gray-700 font-medium">{(() => {
-                      const puesto = getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]);
-                      return puesto ? `#${puesto}` : "Sin puesto";
-                    })()}</td>
-                    <td className="p-3">
-                      <span
-                        className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          reserva?.ReservaActiva ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
-                        }`}
-                      >
-                        {reserva?.ReservaActiva ? "Activa" : "Cancelada"}
-                      </span>
-                    </td>
-                    <td className="p-3 text-gray-500">{reserva?.IdEmpleadoPuestoTrabajo || "-"}</td>
+                reservas.map((r, idx) => (
+                  <tr key={`${r?.IdEmpleadoPuestoTrabajo}-${idx}`} className="border-t border-gray-100 odd:bg-white even:bg-gray-50/50">
+                    {columnasVisibles.FechaReserva && <td className="p-3">{formatearFecha(r?.FechaReserva)}</td>}
+                    {columnasVisibles.Persona && <td className="p-3"><p className="font-medium">{r?.NombreEmpleadoVista || "Sin nombre"}</p><p className="text-xs text-gray-500">ID: {r?.IdEmpleado || "N/D"}</p></td>}
+                    {columnasVisibles.NombreArea && <td className="p-3">{getValorCampo(r, ["NombreArea", "Area"]) || "Sin área"}</td>}
+                    {columnasVisibles.NoPuesto && <td className="p-3">{getValorCampo(r, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]) || "Sin puesto"}</td>}
+                    {columnasVisibles.ReservaActiva && <td className="p-3">{r?.ReservaActiva ? "Activa" : "Cancelada"}</td>}
+                    {columnasVisibles.IdEmpleadoPuestoTrabajo && <td className="p-3">{r?.IdEmpleadoPuestoTrabajo || "-"}</td>}
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </div>
 
-      <div className="bg-white border border-gray-200 rounded-2xl p-4 md:p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-gray-900 mb-3">Reservas por día (últimos 7 días filtrados)</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {resumen.dias.length === 0 ? (
-            <p className="text-sm text-gray-500">No hay datos para mostrar.</p>
-          ) : (
-            resumen.dias.map(([fecha, cantidad]) => (
-              <div key={fecha} className="rounded-xl border border-gray-200 p-3 bg-gray-50">
-                <p className="text-xs text-gray-500">{formatearFecha(fecha)}</p>
-                <p className="text-xl font-semibold text-gray-900">{cantidad}</p>
-                <p className="text-xs text-gray-600">reservaciones</p>
-              </div>
-            ))
-          )}
+        <div className="flex items-center justify-between text-sm">
+          <p className="text-gray-600">Página {meta.page} de {meta.totalPages} · {meta.total} registros</p>
+          <div className="flex gap-2">
+            <button type="button" disabled={loading || meta.page <= 1} onClick={() => cargarReservas({ page: meta.page - 1, pageSize: meta.pageSize })} className="px-3 py-1 rounded border border-gray-300 disabled:opacity-50">Anterior</button>
+            <button type="button" disabled={loading || meta.page >= meta.totalPages} onClick={() => cargarReservas({ page: meta.page + 1, pageSize: meta.pageSize })} className="px-3 py-1 rounded border border-gray-300 disabled:opacity-50">Siguiente</button>
+          </div>
         </div>
       </div>
     </div>
