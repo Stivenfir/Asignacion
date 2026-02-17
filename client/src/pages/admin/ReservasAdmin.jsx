@@ -218,30 +218,36 @@ export default function ReservasAdmin() {
       <div className="rounded-2xl border border-blue-100 bg-gradient-to-r from-white via-blue-50/70 to-indigo-50/60 p-6 shadow-sm">
         <h1 className="text-2xl font-bold text-gray-900">📅 Lista de Reservas</h1>
         <p className="text-sm text-gray-700 mt-1">
-          Vista administrativa completa de reservas (hasta 5000). Incluye filtros, áreas y trazabilidad.
+          Panel administrativo de reservas (hasta 5000), con filtros avanzados y visualización operativa por persona, área y estado.
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
           <p className="text-xs text-gray-500">Total filtrado</p>
           <p className="text-3xl font-semibold text-gray-900">{resumen.total}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
           <p className="text-xs text-gray-500">Activas</p>
           <p className="text-3xl font-semibold text-emerald-700">{resumen.activas}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
           <p className="text-xs text-gray-500">Canceladas</p>
           <p className="text-3xl font-semibold text-rose-700">{resumen.canceladas}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
           <p className="text-xs text-gray-500">Días con reservas</p>
           <p className="text-3xl font-semibold text-indigo-700">{resumen.dias.length}</p>
         </div>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <h2 className="text-lg font-semibold text-gray-900">Filtros y detalle de reservas</h2>
+          <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+            Datos en tiempo real
+          </span>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <input
             value={filtroTexto}
@@ -293,14 +299,13 @@ export default function ReservasAdmin() {
           </button>
         </div>
 
-        <div className="overflow-x-auto border border-gray-200 rounded-xl">
+        <div className="overflow-x-auto border border-gray-200 rounded-xl shadow-inner">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 text-gray-700">
               <tr>
                 <th className="text-left p-3 font-semibold">Fecha</th>
                 <th className="text-left p-3 font-semibold">Persona</th>
                 <th className="text-left p-3 font-semibold">Área</th>
-                <th className="text-left p-3 font-semibold">ID Área</th>
                 <th className="text-left p-3 font-semibold">Puesto</th>
                 <th className="text-left p-3 font-semibold">Estado</th>
                 <th className="text-left p-3 font-semibold">ID Reserva</th>
@@ -309,15 +314,15 @@ export default function ReservasAdmin() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="p-4 text-gray-500" colSpan={7}>Cargando reservas...</td>
+                  <td className="p-4 text-gray-500" colSpan={6}>Cargando reservas...</td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td className="p-4 text-rose-600" colSpan={7}>{error}</td>
+                  <td className="p-4 text-rose-600" colSpan={6}>{error}</td>
                 </tr>
               ) : reservasFiltradas.length === 0 ? (
                 <tr>
-                  <td className="p-4 text-gray-500" colSpan={7}>No hay reservas con esos filtros.</td>
+                  <td className="p-4 text-gray-500" colSpan={6}>No hay reservas con esos filtros.</td>
                 </tr>
               ) : (
                 reservasFiltradas.map((reserva, idx) => (
@@ -330,9 +335,15 @@ export default function ReservasAdmin() {
                       <p className="font-medium">{reserva?.NombreEmpleadoVista || "Sin nombre"}</p>
                       <p className="text-xs text-gray-500">ID Empleado: {reserva?.IdEmpleado || "N/D"}</p>
                     </td>
-                    <td className="p-3 text-gray-700">{getValorCampo(reserva, ["NombreArea", "Area"]) || "Sin área"}</td>
-                    <td className="p-3 text-gray-700">{reserva?.IdArea || "N/D"}</td>
-                    <td className="p-3 text-gray-700">{getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]) || "Sin puesto"}</td>
+                    <td className="p-3 text-gray-700">
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        {getValorCampo(reserva, ["NombreArea", "Area"]) || "Sin área"}
+                      </span>
+                    </td>
+                    <td className="p-3 text-gray-700 font-medium">{(() => {
+                      const puesto = getValorCampo(reserva, ["NoPuesto", "NumeroPuesto", "Puesto", "IdPuestoTrabajo"]);
+                      return puesto ? `#${puesto}` : "Sin puesto";
+                    })()}</td>
                     <td className="p-3">
                       <span
                         className={`px-2 py-1 rounded-full text-xs font-medium ${
