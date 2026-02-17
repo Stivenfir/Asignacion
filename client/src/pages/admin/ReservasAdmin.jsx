@@ -57,120 +57,99 @@ export default function ReservasAdmin() {
   const [fechaInicio, setFechaInicio] = useState("");
   const [fechaFin, setFechaFin] = useState("");
 
+  const normalizarYOrdenarReservas = (dataReservas) => {
+    const reservasBase = Array.isArray(dataReservas) ? dataReservas : [];
+
+    const normalizadas = reservasBase.map((reserva) => ({
+      ...reserva,
+      NombreEmpleadoVista: getNombreEmpleado(reserva),
+      NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
+      NoPuesto:
+        reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
+      NumeroPiso: reserva?.NumeroPiso ?? null,
+    }));
+
+    normalizadas.sort((a, b) => {
+      const fechaA = getFechaComparable(b?.FechaReserva);
+      const fechaB = getFechaComparable(a?.FechaReserva);
+      return String(fechaA).localeCompare(String(fechaB));
+    });
+
+    return normalizadas;
+  };
+
+  const fetchConTimeout = async (url, options = {}, timeoutMs = 5000) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   useEffect(() => {
+    let cancelled = false;
+
     const cargarReservas = async () => {
+      setLoading(true);
+      setError("");
+
+      const token = localStorage.getItem("token");
+      const headers = { Authorization: `Bearer ${token}` };
+
+      let huboCargaRapida = false;
+
+      // 1) Carga rápida (básica) para evitar pantalla en "Cargando" demasiado tiempo
       try {
-        setLoading(true);
-        setError("");
+        const resBasicas = await fetchConTimeout(`${API}/api/reservas/todas`, { headers }, 2200);
+        if (resBasicas.ok && !cancelled) {
+          const dataBasica = await resBasicas.json();
+          setReservas(normalizarYOrdenarReservas(dataBasica));
+          setLoading(false);
+          huboCargaRapida = true;
+        }
+      } catch {
+        // seguimos con la enriquecida
+      }
 
-        const token = localStorage.getItem("token");
-        const headers = { Authorization: `Bearer ${token}` };
+      // 2) Carga enriquecida en segundo plano
+      try {
+        const resEnriquecidas = await fetchConTimeout(
+          `${API}/api/reservas/todas-enriquecidas`,
+          { headers },
+          6500,
+        );
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4500);
-
-        let resReservas;
-        try {
-          resReservas = await fetch(`${API}/api/reservas/todas-enriquecidas`, {
-            headers,
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
+        if (resEnriquecidas.ok && !cancelled) {
+          const dataEnriquecida = await resEnriquecidas.json();
+          setReservas(normalizarYOrdenarReservas(dataEnriquecida));
+          setError("");
+          setLoading(false);
+          return;
         }
 
-        if (!resReservas.ok) {
-          const fallback = await fetch(`${API}/api/reservas/todas`, { headers });
-          if (!fallback.ok) {
-            const mensaje = await resReservas.text();
-            throw new Error(`No se pudieron cargar reservas (${resReservas.status}): ${mensaje}`);
-          }
-          resReservas = fallback;
+        if (!huboCargaRapida && !cancelled) {
+          setError("No se pudieron cargar reservas enriquecidas.");
+          setLoading(false);
+        } else if (!cancelled) {
+          setError("Mostramos datos rápidos; el enriquecimiento no respondió a tiempo.");
         }
-
-        const dataReservas = await resReservas.json();
-        const reservasBase = Array.isArray(dataReservas) ? dataReservas : [];
-
-        const enriquecidas = reservasBase.map((reserva) => ({
-          ...reserva,
-          NombreEmpleadoVista: getNombreEmpleado(reserva),
-          NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
-          NoPuesto:
-            reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
-          NumeroPiso: reserva?.NumeroPiso ?? null,
-        }));
-
-        enriquecidas.sort((a, b) => {
-          const fechaA = getFechaComparable(b?.FechaReserva);
-          const fechaB = getFechaComparable(a?.FechaReserva);
-          return String(fechaA).localeCompare(String(fechaB));
-        });
-
-        setReservas(enriquecidas);
-      } catch (err) {
-        if (err.name === "AbortError") {
-          try {
-            const token = localStorage.getItem("token");
-            const retry = await fetch(`${API}/api/reservas/todas-enriquecidas`, {
-              headers: { Authorization: `Bearer ${token}` },
-            });
-
-            if (retry.ok) {
-              const data = await retry.json();
-              const reservasBase = Array.isArray(data) ? data : [];
-              const base = reservasBase.map((reserva) => ({
-                ...reserva,
-                NombreEmpleadoVista: getNombreEmpleado(reserva),
-                NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
-                NoPuesto:
-                  reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
-                NumeroPiso: reserva?.NumeroPiso ?? null,
-              }));
-              base.sort((a, b) => {
-                const fechaA = getFechaComparable(b?.FechaReserva);
-                const fechaB = getFechaComparable(a?.FechaReserva);
-                return String(fechaA).localeCompare(String(fechaB));
-              });
-              setReservas(base);
-              setError("La carga tardó más de lo esperado, pero ya mostramos reservas enriquecidas.");
-            } else {
-              const fallback = await fetch(`${API}/api/reservas/todas`, {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (fallback.ok) {
-                const data = await fallback.json();
-                const reservasBase = Array.isArray(data) ? data : [];
-                const base = reservasBase.map((reserva) => ({
-                  ...reserva,
-                  NombreEmpleadoVista: getNombreEmpleado(reserva),
-                  NombreArea: reserva?.NombreArea ?? reserva?.Area ?? null,
-                  NoPuesto:
-                    reserva?.NoPuesto ?? reserva?.NumeroPuesto ?? reserva?.Puesto ?? reserva?.IdPuestoTrabajo ?? null,
-                  NumeroPiso: reserva?.NumeroPiso ?? null,
-                }));
-                base.sort((a, b) => {
-                  const fechaA = getFechaComparable(b?.FechaReserva);
-                  const fechaB = getFechaComparable(a?.FechaReserva);
-                  return String(fechaA).localeCompare(String(fechaB));
-                });
-                setReservas(base);
-                setError("Mostramos una versión rápida mientras termina el enriquecimiento.");
-              } else {
-                setError("La carga tardó más de lo esperado.");
-              }
-            }
-          } catch {
-            setError("La carga tardó más de lo esperado.");
-          }
-        } else {
-          setError(err.message || "Error al cargar reservas");
+      } catch {
+        if (!huboCargaRapida && !cancelled) {
+          setError("No fue posible cargar reservas en este momento.");
+          setLoading(false);
+        } else if (!cancelled) {
+          setError("Mostramos datos rápidos mientras el enriquecimiento termina.");
         }
-      } finally {
-        setLoading(false);
       }
     };
 
     cargarReservas();
+
+    return () => {
+      cancelled = true;
+    };
   }, [API]);
 
   const reservasFiltradas = useMemo(() => {
