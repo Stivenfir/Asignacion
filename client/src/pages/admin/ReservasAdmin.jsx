@@ -78,14 +78,73 @@ export default function ReservasAdmin() {
     return normalizadas;
   };
 
-  const fetchConTimeout = async (url, options = {}, timeoutMs = 5000) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(url, { ...options, signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
+  const enriquecerConAreaYPuesto = async (reservasBase, headers) => {
+    const lista = Array.isArray(reservasBase) ? reservasBase : [];
+    if (!lista.length) return [];
+
+    const necesitaEnriquecer = lista.some(
+      (r) => !r?.NombreArea || r?.NoPuesto == null,
+    );
+    if (!necesitaEnriquecer) return normalizarYOrdenarReservas(lista);
+
+    const resPisos = await fetch(`${API}/api/pisos`, { headers });
+    const pisos = resPisos.ok ? await resPisos.json() : [];
+    const catalogoPisos = Array.isArray(pisos) ? pisos : [];
+
+    const indicePuestos = new Map();
+
+    for (const piso of catalogoPisos) {
+      const idPiso = Number(piso?.IDPiso);
+      if (!idPiso) continue;
+
+      try {
+        const resAreas = await fetch(`${API}/api/areas/piso/${idPiso}`, { headers });
+        if (!resAreas.ok) continue;
+
+        const areas = await resAreas.json();
+        const listaAreas = Array.isArray(areas) ? areas : [];
+
+        const respuestasPuestos = await Promise.all(
+          listaAreas
+            .filter((a) => a?.IdAreaPiso)
+            .map((a) =>
+              fetch(`${API}/api/puestos/area/${a.IdAreaPiso}`, { headers })
+                .then((r) => (r.ok ? r.json() : []))
+                .catch(() => []),
+            ),
+        );
+
+        for (let i = 0; i < listaAreas.length; i += 1) {
+          const area = listaAreas[i];
+          const puestosArea = Array.isArray(respuestasPuestos[i]) ? respuestasPuestos[i] : [];
+
+          for (const puesto of puestosArea) {
+            const idPuesto = Number(puesto?.IdPuestoTrabajo);
+            if (!idPuesto || indicePuestos.has(idPuesto)) continue;
+
+            indicePuestos.set(idPuesto, {
+              NombreArea: area?.NombreArea ?? null,
+              NoPuesto: puesto?.NoPuesto ?? puesto?.NumeroPuesto ?? puesto?.Puesto ?? null,
+              NumeroPiso: piso?.NumeroPiso ?? idPiso,
+            });
+          }
+        }
+      } catch {
+        // noop
+      }
     }
+
+    const enriquecidas = lista.map((r) => {
+      const info = indicePuestos.get(Number(r?.IdPuestoTrabajo));
+      return {
+        ...r,
+        NombreArea: r?.NombreArea ?? info?.NombreArea ?? r?.Area ?? null,
+        NoPuesto: r?.NoPuesto ?? r?.NumeroPuesto ?? r?.Puesto ?? info?.NoPuesto ?? r?.IdPuestoTrabajo ?? null,
+        NumeroPiso: r?.NumeroPiso ?? info?.NumeroPiso ?? null,
+      };
+    });
+
+    return normalizarYOrdenarReservas(enriquecidas);
   };
 
   useEffect(() => {
@@ -95,52 +154,30 @@ export default function ReservasAdmin() {
       setLoading(true);
       setError("");
 
-      const token = localStorage.getItem("token");
-      const headers = { Authorization: `Bearer ${token}` };
-
-      let huboCargaRapida = false;
-
-      // 1) Carga rápida (básica) para evitar pantalla en "Cargando" demasiado tiempo
       try {
-        const resBasicas = await fetchConTimeout(`${API}/api/reservas/todas`, { headers }, 2200);
-        if (resBasicas.ok && !cancelled) {
-          const dataBasica = await resBasicas.json();
-          setReservas(normalizarYOrdenarReservas(dataBasica));
-          setLoading(false);
-          huboCargaRapida = true;
-        }
-      } catch {
-        // seguimos con la enriquecida
-      }
+        const token = localStorage.getItem("token");
+        const headers = { Authorization: `Bearer ${token}` };
 
-      // 2) Carga enriquecida en segundo plano
-      try {
-        const resEnriquecidas = await fetchConTimeout(
-          `${API}/api/reservas/todas-enriquecidas`,
-          { headers },
-          6500,
-        );
+        const resReservas = await fetch(`${API}/api/reservas/todas`, { headers });
 
-        if (resEnriquecidas.ok && !cancelled) {
-          const dataEnriquecida = await resEnriquecidas.json();
-          setReservas(normalizarYOrdenarReservas(dataEnriquecida));
-          setError("");
-          setLoading(false);
-          return;
+        if (!resReservas.ok) {
+          const mensaje = await resReservas.text();
+          throw new Error(`No se pudieron cargar reservas (${resReservas.status}): ${mensaje}`);
         }
 
-        if (!huboCargaRapida && !cancelled) {
-          setError("No se pudieron cargar reservas enriquecidas.");
-          setLoading(false);
-        } else if (!cancelled) {
-          setError("Mostramos datos rápidos; el enriquecimiento no respondió a tiempo.");
+        const dataReservas = await resReservas.json();
+        const listaFinal = await enriquecerConAreaYPuesto(dataReservas, headers);
+
+        if (!cancelled) {
+          setReservas(listaFinal);
         }
-      } catch {
-        if (!huboCargaRapida && !cancelled) {
-          setError("No fue posible cargar reservas en este momento.");
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || "Error al cargar reservas");
+        }
+      } finally {
+        if (!cancelled) {
           setLoading(false);
-        } else if (!cancelled) {
-          setError("Mostramos datos rápidos mientras el enriquecimiento termina.");
         }
       }
     };
