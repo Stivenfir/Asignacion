@@ -7,7 +7,7 @@ const menuItems = [
   { path: "/mis-reservas", label: "Mis Reservas", icon: "📋", roles: ["admin", "jefe", "empleado"] },  
     
   // Sección Lider  
-  { path: "/admin/asignaciones", label: "Re-asignar Puestos", icon: "🔄", roles: ["admin", "jefe"] },  
+  { path: "/admin/asignaciones", label: "Re-asignar Puestos (Próximamente)", icon: "🚧", roles: ["admin", "jefe"] },  
 ];  
     
 export default function Sidebar({ isOpen, onClose }) {    

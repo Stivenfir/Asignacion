@@ -10,8 +10,8 @@ const menuItems = [
   { path: "/areas", label: "Gestión de Áreas", icon: "📍", roles: ["admin"] },
   { path: "/puestos", label: "Gestión de Puestos", icon: "🪑", roles: ["admin"] },   
   { path: "/admin/reservas", label: "Lista de Reservas", icon: "👥", roles: ["admin"] },  
-  { path: "/admin/asignaciones", label: "Re-asignar Puestos", icon: "🔄", roles: ["admin", "jefe"] },  
-  { path: "/admin/parametros", label: "Parametrización", icon: "⚙️", roles: ["admin"] },  
+  { path: "/admin/asignaciones", label: "Re-asignar Puestos (Próximamente)", icon: "🚧", roles: ["admin", "jefe"] },  
+  { path: "/admin/parametros", label: "Parametrización (Próximamente)", icon: "🚧", roles: ["admin"] },  
 ];  
     
 export default function Sidebar({ isOpen, onClose }) {    
