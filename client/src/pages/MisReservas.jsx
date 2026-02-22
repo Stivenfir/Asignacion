@@ -168,10 +168,11 @@ export default function MisReservas() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between">
+    <div className="bg-gray-50 overflow-x-hidden">
+      <div className="max-w-7xl mx-auto">
+      <header className="bg-white border border-gray-200 rounded-2xl shadow-sm">
+        <div className="px-4 md:px-6 py-4">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">
                 📋 Mis Reservas
@@ -200,7 +201,7 @@ export default function MisReservas() {
 
 
       {reservasData.pisos.length === 0 && (
-        <div className="mx-6 mt-4 p-4 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-800">
+        <div className="mt-4 p-4 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-800">
           <p className="font-medium">
             ⚠️ No se encontraron pisos con puestos disponibles para reservar.
           </p>
@@ -208,7 +209,7 @@ export default function MisReservas() {
       )}
 
       {["global", "all-pisos"].includes(reservasData.scopePisos) && reservasData.pisos.length > 0 && (
-        <div className="mx-6 mt-4 p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800">
+        <div className="mt-4 p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800">
           <p className="font-medium">
             ℹ️ No encontramos configuración completa por área, así que te mostramos pisos disponibles para que puedas reservar.
           </p>
@@ -223,7 +224,7 @@ export default function MisReservas() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.2 }}
-          className={`mx-6 mt-4 p-4 rounded-xl ${
+          className={`mt-4 p-4 rounded-xl ${
             reservasData.mensaje.tipo === "success"
               ? "bg-green-50 border border-green-200 text-green-800"
               : "bg-red-50 border border-red-200 text-red-800"
@@ -238,7 +239,7 @@ export default function MisReservas() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25 }}
-        className="p-6"
+        className="mt-4"
       >
         {/* ✅ AGREGAR: Componente de ayuda contextual */}
         <AyudaReservas
@@ -303,6 +304,7 @@ export default function MisReservas() {
         />
       )}
 
+      </div>
     </div>
   );
 }
