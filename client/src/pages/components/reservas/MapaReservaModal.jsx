@@ -84,6 +84,30 @@ function toDisplayPoint(valueX, valueY, metrics) {
   return { x, y, source: "raw" };
 }
 
+function toDisplayRect(rect, metrics) {
+  const x = Number(rect?.PosicionX);
+  const y = Number(rect?.PosicionY);
+  const w = Number(rect?.Ancho);
+  const h = Number(rect?.Alto);
+  if (![x, y, w, h].every(Number.isFinite) || !metrics) return null;
+
+  const rectDisplay = x >= 0 && y >= 0 && x + w <= metrics.displayWidth && y + h <= metrics.displayHeight;
+  if (rectDisplay) return { x, y, w, h, source: "display" };
+
+  const rectNatural = x >= 0 && y >= 0 && x + w <= metrics.naturalWidth && y + h <= metrics.naturalHeight;
+  if (rectNatural && (metrics.naturalWidth !== metrics.displayWidth || metrics.naturalHeight !== metrics.displayHeight)) {
+    return {
+      x: (x * metrics.displayWidth) / metrics.naturalWidth,
+      y: (y * metrics.displayHeight) / metrics.naturalHeight,
+      w: (w * metrics.displayWidth) / metrics.naturalWidth,
+      h: (h * metrics.displayHeight) / metrics.naturalHeight,
+      source: "natural",
+    };
+  }
+
+  return { x, y, w, h, source: "raw" };
+}
+
 function syncCanvasWithImage(canvas, image) {
   if (!canvas || !image) return null;
 
@@ -114,6 +138,7 @@ export default function MapaReservaModal({
   const [loading, setLoading] = useState(true);  
   const [loadingUbicacion, setLoadingUbicacion] = useState(false);
   const [delimitacionesArea, setDelimitacionesArea] = useState([]);
+  const [nombreAreaDetectada, setNombreAreaDetectada] = useState(null);
   const canvasRef = useRef(null);  
   const imagenRef = useRef(null);  
   const API = import.meta.env.VITE_API_URL || "http://localhost:3000";  
@@ -212,12 +237,14 @@ export default function MapaReservaModal({
     const cargarDelimitacionesArea = async () => {
       if (!pisoEfectivo?.IDPiso) {
         setDelimitacionesArea([]);
+        setNombreAreaDetectada(null);
         return;
       }
 
       const token = localStorage.getItem("token");
       if (!token) {
         setDelimitacionesArea([]);
+        setNombreAreaDetectada(null);
         return;
       }
 
@@ -249,8 +276,11 @@ export default function MapaReservaModal({
 
         if (!areaEncontrada?.IdAreaPiso) {
           setDelimitacionesArea([]);
+          setNombreAreaDetectada(null);
           return;
         }
+
+        setNombreAreaDetectada(areaEncontrada?.NombreArea || null);
 
         const resDel = await fetch(
           `${API}/api/areas/piso/${areaEncontrada.IdAreaPiso}/delimitaciones`,
@@ -282,6 +312,7 @@ export default function MapaReservaModal({
         }
       } catch {
         setDelimitacionesArea([]);
+        setNombreAreaDetectada(null);
       }
     };
 
@@ -407,17 +438,49 @@ export default function MapaReservaModal({
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    const delimitacionesValidas = (Array.isArray(delimitacionesArea) ? delimitacionesArea : [])
+      .map((d) => toDisplayRect(d, metrics))
+      .filter((d) => d && [d.x, d.y, d.w, d.h].every(Number.isFinite));
+
     if (!coords.hasCoords) return;
 
+    const candidatos = [];
     const puntoBase = toDisplayPoint(coords.x, coords.y, metrics);
+    if (puntoBase) candidatos.push({ x: puntoBase.x, y: puntoBase.y, tipo: puntoBase.source });
 
-    let x = puntoBase?.x;
-    let y = puntoBase?.y;
+    candidatos.push({
+      x: (coords.x * metrics.displayWidth) / metrics.naturalWidth,
+      y: (coords.y * metrics.displayHeight) / metrics.naturalHeight,
+      tipo: "natural-a-display",
+    });
 
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      x = (coords.x * metrics.displayWidth) / metrics.naturalWidth;
-      y = (coords.y * metrics.displayHeight) / metrics.naturalHeight;
-    }
+    candidatos.push({ x: coords.x, y: coords.y, tipo: "raw" });
+
+    const puntaje = (pt) => {
+      if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return -1000;
+      let score = 0;
+      const dentroPlano = pt.x >= 0 && pt.y >= 0 && pt.x <= metrics.displayWidth && pt.y <= metrics.displayHeight;
+      score += dentroPlano ? 50 : -200;
+
+      if (delimitacionesValidas.length) {
+        const dentroArea = delimitacionesValidas.some((d) =>
+          pt.x >= d.x && pt.x <= d.x + d.w && pt.y >= d.y && pt.y <= d.y + d.h,
+        );
+        score += dentroArea ? 150 : -50;
+      }
+
+      if (pt.tipo === "display") score += 20;
+      if (pt.tipo === "natural") score += 18;
+      if (pt.tipo === "natural-a-display") score += 16;
+      return score;
+    };
+
+    const mejor = candidatos
+      .map((pt) => ({ ...pt, score: puntaje(pt) }))
+      .sort((a, b) => b.score - a.score)[0];
+
+    let x = mejor?.x;
+    let y = mejor?.y;
 
     x = Math.max(0, Math.min(metrics.displayWidth, x));
     y = Math.max(0, Math.min(metrics.displayHeight, y));
@@ -482,6 +545,11 @@ export default function MapaReservaModal({
   
   const coordsReserva = getReservaCoords(reservaRender);
   const puestoLabel = getReservaPuestoLabel(reservaRender) ?? "N/D";
+  const nombreAreaVista =
+    reservaRender?.NombreArea ||
+    areaAsignada?.NombreArea ||
+    nombreAreaDetectada ||
+    (Number.isFinite(areaIdObjetivo) && areaIdObjetivo > 0 ? `Área #${areaIdObjetivo}` : "Sin área");
 
   return (  
     <div  
@@ -502,7 +570,7 @@ export default function MapaReservaModal({
               ✅ Puesto Asignado  
             </h3>  
             <p className="text-sm text-gray-600 mt-1">  
-              {reservaRender?.NombreArea || areaAsignada?.NombreArea || `Área ${areaAsignada?.IdArea || "N/D"}`} • Puesto #{puestoLabel}
+              {nombreAreaVista} • Puesto #{puestoLabel}
             </p>  
           </div>  
           <button  
