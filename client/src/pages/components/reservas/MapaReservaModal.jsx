@@ -606,7 +606,7 @@ export default function MapaReservaModal({
         animate={{ opacity: 1, scale: 1 }}  
         exit={{ opacity: 0, scale: 0.95 }}  
         onClick={(e) => e.stopPropagation()}  
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col"  
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden"  
       >  
         {/* Header */}  
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-2xl">  
@@ -627,7 +627,7 @@ export default function MapaReservaModal({
         </div>  
   
         {/* Contenido */}  
-        <div className="flex-1 overflow-y-auto p-6">  
+        <div className="flex-1 overflow-hidden p-4 md:p-6">  
           <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-xl">  
             <p className="text-sm text-green-800 font-medium">  
               🎉 Tu reserva ha sido confirmada. Este es tu puesto asignado en el plano.  
@@ -659,13 +659,13 @@ export default function MapaReservaModal({
                   Este registro no tiene coordenadas guardadas, pero puedes ubicarte por piso y área.
                 </div>
               ) : null}
-              <div className="max-h-[65vh] overflow-auto rounded-xl border-2 border-gray-300 bg-gray-50 shadow-lg">
-                <div className="relative inline-block w-full">
+              <div className="max-h-[64vh] overflow-auto rounded-xl border-2 border-gray-300 bg-gray-50 shadow-lg">
+                <div className="relative inline-block min-w-max">
                   <img
                     ref={imagenRef}
                     src={planoUrl}
                     alt="Plano del piso"
-                    className="block w-full h-auto"
+                    className="block h-auto max-w-none"
                     onLoad={() => {
                       dibujarPuestoAsignado();
                     }}
