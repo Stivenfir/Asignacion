@@ -84,32 +84,6 @@ function toDisplayPoint(valueX, valueY, metrics) {
   return { x, y, source: "raw" };
 }
 
-function toDisplayRect(rect, metrics) {
-  const x = Number(rect?.PosicionX);
-  const y = Number(rect?.PosicionY);
-  const w = Number(rect?.Ancho);
-  const h = Number(rect?.Alto);
-  if (![x, y, w, h].every(Number.isFinite) || !metrics) return null;
-
-  const rectDisplay = x >= 0 && y >= 0 && x + w <= metrics.displayWidth && y + h <= metrics.displayHeight;
-  if (rectDisplay) {
-    return { x, y, w, h, source: "display" };
-  }
-
-  const rectNatural = x >= 0 && y >= 0 && x + w <= metrics.naturalWidth && y + h <= metrics.naturalHeight;
-  if (rectNatural && (metrics.naturalWidth !== metrics.displayWidth || metrics.naturalHeight !== metrics.displayHeight)) {
-    return {
-      x: (x * metrics.displayWidth) / metrics.naturalWidth,
-      y: (y * metrics.displayHeight) / metrics.naturalHeight,
-      w: (w * metrics.displayWidth) / metrics.naturalWidth,
-      h: (h * metrics.displayHeight) / metrics.naturalHeight,
-      source: "natural",
-    };
-  }
-
-  return { x, y, w, h, source: "raw" };
-}
-
 function syncCanvasWithImage(canvas, image) {
   if (!canvas || !image) return null;
 
@@ -197,13 +171,18 @@ export default function MapaReservaModal({
         if (!areasValidas.length) return;
 
         const respuestasPuestos = await Promise.all(
-          areasValidas.map((area) =>
-            fetch(`${API}/api/puestos/area/${area.IdAreaPiso}`, {
+          areasValidas.map(async (area) => {
+            const puestosArea = await fetch(`${API}/api/puestos/area/${area.IdAreaPiso}`, {
               headers: { Authorization: `Bearer ${token}` },
             })
               .then((r) => (r.ok ? r.json() : []))
-              .catch(() => []),
-          ),
+              .catch(() => []);
+
+            return (Array.isArray(puestosArea) ? puestosArea : []).map((p) => ({
+              ...p,
+              __area: area,
+            }));
+          }),
         );
 
         const puestos = respuestasPuestos.flat().filter(Boolean);
@@ -213,6 +192,9 @@ export default function MapaReservaModal({
         setReservaRender((prev) => ({
           ...(prev || {}),
           ...puesto,
+          NombreArea: puesto?.__area?.NombreArea ?? prev?.NombreArea ?? areaAsignada?.NombreArea ?? null,
+          IdArea: puesto?.__area?.IdArea ?? prev?.IdArea ?? null,
+          IdAreaPiso: puesto?.__area?.IdAreaPiso ?? prev?.IdAreaPiso ?? null,
           NoPuesto: getReservaPuestoLabel(prev) ?? getReservaPuestoLabel(puesto),
           // Siempre priorizamos coordenadas actuales del catálogo de puestos.
           UbicacionX: puesto?.UbicacionX,
@@ -425,103 +407,17 @@ export default function MapaReservaModal({
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const delimitacionesValidas = (Array.isArray(delimitacionesArea) ? delimitacionesArea : [])
-      .map((d) => {
-        const rectDisplay = toDisplayRect(d, metrics);
-        const rawX = Number(d?.PosicionX);
-        const rawY = Number(d?.PosicionY);
-        const rawW = Number(d?.Ancho);
-        const rawH = Number(d?.Alto);
-
-        if (!rectDisplay || ![rawX, rawY, rawW, rawH].every(Number.isFinite)) return null;
-
-        return {
-          ...rectDisplay,
-          rawX,
-          rawY,
-          rawW,
-          rawH,
-        };
-      })
-      .filter((d) => d && [d.x, d.y, d.w, d.h, d.rawX, d.rawY, d.rawW, d.rawH].every(Number.isFinite));
-
-    const puntoBasePreview = coords.hasCoords ? toDisplayPoint(coords.x, coords.y, metrics) : null;
-    const delimitacionesParaDibujar = (() => {
-      if (!delimitacionesValidas.length || !puntoBasePreview) return delimitacionesValidas;
-
-      const contenedoras = delimitacionesValidas.filter((d) =>
-        puntoBasePreview.x >= d.x &&
-        puntoBasePreview.x <= d.x + d.w &&
-        puntoBasePreview.y >= d.y &&
-        puntoBasePreview.y <= d.y + d.h,
-      );
-
-      if (!contenedoras.length) return delimitacionesValidas;
-
-      // Si hay varias delimitaciones que contienen el punto, usar la más específica
-      // (área mínima) para evitar resaltar rectángulos macro que dan sensación de descuadre.
-      const masEspecifica = contenedoras
-        .map((d) => ({ ...d, area: d.w * d.h }))
-        .sort((a, b) => a.area - b.area)[0];
-
-      return masEspecifica ? [masEspecifica] : contenedoras;
-    })();
-
-
     if (!coords.hasCoords) return;
 
-    const candidatos = [];
-
-    // 1) Coordenadas directas detectando automáticamente display vs natural
     const puntoBase = toDisplayPoint(coords.x, coords.y, metrics);
-    if (puntoBase) {
-      candidatos.push({ x: puntoBase.x, y: puntoBase.y, tipo: puntoBase.source });
+
+    let x = puntoBase?.x;
+    let y = puntoBase?.y;
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      x = (coords.x * metrics.displayWidth) / metrics.naturalWidth;
+      y = (coords.y * metrics.displayHeight) / metrics.naturalHeight;
     }
-
-    // 2) Coordenadas guardadas en escala natural de la imagen
-    candidatos.push({
-      x: (coords.x * metrics.displayWidth) / metrics.naturalWidth,
-      y: (coords.y * metrics.displayHeight) / metrics.naturalHeight,
-      tipo: "natural-a-display",
-    });
-
-    // 3) Coordenadas relativas a la delimitación que contiene el punto original.
-    // Esto corrige desfases cuando el mapeo fue guardado con otro tamaño de visualización.
-    delimitacionesParaDibujar.forEach((d) => {
-      const dentroRaw = coords.x >= d.rawX && coords.x <= d.rawX + d.rawW && coords.y >= d.rawY && coords.y <= d.rawY + d.rawH;
-      if (!dentroRaw || d.rawW <= 0 || d.rawH <= 0 || d.w <= 0 || d.h <= 0) return;
-
-      const relX = (coords.x - d.rawX) / d.rawW;
-      const relY = (coords.y - d.rawY) / d.rawH;
-
-      candidatos.push({
-        x: d.x + relX * d.w,
-        y: d.y + relY * d.h,
-        tipo: "relativo-delimitacion",
-      });
-    });
-
-    const puntaje = (pt) => {
-      if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return -100;
-      const dentroPlano = pt.x >= 0 && pt.y >= 0 && pt.x <= metrics.displayWidth && pt.y <= metrics.displayHeight;
-      let score = dentroPlano ? 10 : -10;
-
-      if (delimitacionesParaDibujar.length) {
-        const dentroArea = delimitacionesParaDibujar.some((d) =>
-          pt.x >= d.x && pt.x <= d.x + d.w && pt.y >= d.y && pt.y <= d.y + d.h,
-        );
-        score += dentroArea ? 100 : -40;
-      }
-
-      return score;
-    };
-
-    const mejor = candidatos
-      .map((pt) => ({ ...pt, score: puntaje(pt) }))
-      .sort((a, b) => b.score - a.score)[0];
-
-    let x = mejor?.x ?? coords.x;
-    let y = mejor?.y ?? coords.y;
 
     x = Math.max(0, Math.min(metrics.displayWidth, x));
     y = Math.max(0, Math.min(metrics.displayHeight, y));
